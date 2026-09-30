@@ -34,7 +34,7 @@ Or build on the host instead of pulling:
 | `/archive`       | GET      | Every project's archive            |
 | `/p/<project>/archive` | GET | One project's archive             |
 | `/rename/<id>`   | POST     | Edit a task's text                 |
-| `/task/<id>/<up\|down>` | POST | Reorder a task in its list     |
+| `/reorder`       | POST     | Rewrite one list's order           |
 | `/state`         | GET      | File mtime, for change polling     |
 | `/archive-done`  | POST     | Move done tasks to Archive         |
 | `/move/<id>`     | POST     | Move a task to another project     |
@@ -104,10 +104,20 @@ Inbox's archive automatically on first page load.
 
 - **Edit** -- click a task's text (or focus it and press Enter). It becomes an
   input; Enter saves, Escape cancels. The id, state and position survive.
-- **Reorder tasks** -- ↑/↓ on each row, inside a project view. Hidden in All,
-  where the neighbours on screen aren't the neighbours in the file.
+- **Reorder tasks** -- drag the grip at the left of a row. Available inside a
+  project view only; in All, the neighbours on screen aren't the neighbours in
+  the file. On touch, press and hold briefly before dragging so a flick still
+  scrolls the page.
 - **Reorder projects** -- ↑/↓ in the sidebar. The whole section moves, archive
   included. Inbox is pinned to the top.
+
+## Third-party code
+
+`static/sortable.min.js` is [SortableJS](https://github.com/SortableJS/Sortable)
+1.15.7, MIT licensed (`static/sortable-LICENSE.txt`). It's vendored rather
+than loaded from a CDN so the app has no external runtime dependency. The
+HTML5 drag-and-drop API doesn't fire on iOS touch, which is why a library is
+here at all.
 
 ## Config
 

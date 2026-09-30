@@ -569,38 +569,59 @@ def rename(task_id):
     return back_to(request.form.get("return_to"))
 
 
-@app.route("/task/<task_id>/<direction>", methods=["POST"])
-def reorder_task(task_id, direction):
-    """Swap a task with its neighbour inside the same list."""
+@app.route("/reorder", methods=["POST"])
+def reorder_tasks():
+    """Rewrite one list's order from a drag-and-drop.
+
+    Takes the project, whether it's the archive, and the full ordering as
+    comma-separated ids. Reordering a whole list rather than swapping pairs
+    means a drag that moves something five rows is one write, and a stale
+    page can't half-apply an order built from a list that has since changed.
+    """
     if not authorised():
         return deny()
 
-    step = -1 if direction == "up" else 1 if direction == "down" else 0
-    if not step:
+    project = (request.form.get("project") or "").strip()
+    archived = request.form.get("archived") == "1"
+    order = [i for i in (request.form.get("order") or "").split(",") if i]
+
+    if not project or not order:
         return back_to(request.form.get("return_to"))
 
     with _lock:
         lines = read_file().splitlines()
-        i, _ = find_task(lines, task_id)
-        if i is None:
+        bounds = section_bounds(lines, project, archived=archived)
+        if bounds is None:
             return back_to(request.form.get("return_to"))
 
-        # Only swap within the same contiguous run of tasks, so a task can't
-        # jump a heading into another project.
-        j = i + step
-        while 0 <= j < len(lines):
-            if HEADER_RE.match(lines[j]) or SUB_RE.match(lines[j]):
-                j = None
-                break
-            if TASK_RE.match(lines[j]) and TASK_RE.match(lines[j]).group("text").strip():
-                break
-            j += step
-        else:
-            j = None
+        start, end = bounds
 
-        if j is not None and 0 <= j < len(lines):
-            lines[i], lines[j] = lines[j], lines[i]
-            write_file("\n".join(lines) + "\n")
+        # Map the ids actually present in this slice to their lines.
+        present = {}
+        for i in range(start, end):
+            m = TASK_RE.match(lines[i])
+            if m and m.group("text").strip() and m.group("id"):
+                present[m.group("id")] = lines[i]
+
+        # Ignore ids the page sent that aren't here any more, and keep any
+        # task the page didn't know about -- another device may have added
+        # one since this page was rendered.
+        ordered = [present[i] for i in order if i in present]
+        leftover = [ln for tid, ln in present.items() if tid not in set(order)]
+        if not ordered:
+            return back_to(request.form.get("return_to"))
+
+        # Non-task lines inside the slice (notes, blanks) stay put at the end
+        # rather than being silently dropped.
+        others = [
+            lines[i] for i in range(start, end)
+            if not ((m := TASK_RE.match(lines[i])) and m.group("text").strip()
+                    and m.group("id"))
+        ]
+        others = [ln for ln in others if ln.strip()]
+
+        lines[start:end] = ordered + leftover + others
+        write_file("\n".join(lines) + "\n")
 
     return back_to(request.form.get("return_to"))
 

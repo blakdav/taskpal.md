@@ -268,10 +268,37 @@
     outline: none;
   }
 
-  /* Per-task reorder, same control as projects but scoped to the row. */
-  .tord { opacity: 0; }
-  ul.tasks li:hover .tord, .tord:focus-within { opacity: 1; }
-  .tord button { width: 1.5rem; height: 0.85rem; font-size: 0.75rem; }
+  /* Drag handle. Grabbing the row itself would fight text selection and,
+     on touch, page scrolling -- so dragging starts from the grip only. */
+  .grip {
+    flex: none;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    margin: -0.5rem 0 -0.5rem -0.35rem;
+    padding: 0 0.15rem;
+    color: var(--rule);
+    font-size: 0.7rem;
+    letter-spacing: -0.15em;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    transition: color 120ms ease;
+  }
+  ul.tasks li:hover .grip { color: var(--muted); }
+  .grip:active { cursor: grabbing; }
+
+  .drag-ghost {
+    opacity: 0.35;
+    background: var(--surface);
+  }
+  .drag-active {
+    background: var(--surface);
+    border-radius: 3px;
+  }
+  body.dragging { cursor: grabbing; }
+  body.dragging .kill,
+  body.dragging select.mover { visibility: hidden; }
 
   .crumb {
     display: flex;
@@ -403,8 +430,12 @@
     .label { font-size: 1rem; }
     .kill { padding: 0 0.5rem; font-size: 1.15rem; }
     select.mover { font-size: 0.85rem; padding: 0.25rem; }
-    .tord { opacity: 1; }
-    .tord button { width: 1.9rem; height: 1.2rem; font-size: 0.95rem; }
+    .grip {
+      color: var(--muted);
+      font-size: 0.95rem;
+      padding: 0 0.5rem 0 0.15rem;
+      margin-left: -0.15rem;
+    }
     .capture input { padding: 1rem 1rem 1rem 2.1rem; font-size: 1.05rem; }
     /* Task text doubles as an edit affordance -- click it and it becomes an
      input. No pencil icon cluttering every row. */
@@ -425,10 +456,37 @@
     outline: none;
   }
 
-  /* Per-task reorder, same control as projects but scoped to the row. */
-  .tord { opacity: 0; }
-  ul.tasks li:hover .tord, .tord:focus-within { opacity: 1; }
-  .tord button { width: 1.5rem; height: 0.85rem; font-size: 0.75rem; }
+  /* Drag handle. Grabbing the row itself would fight text selection and,
+     on touch, page scrolling -- so dragging starts from the grip only. */
+  .grip {
+    flex: none;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    margin: -0.5rem 0 -0.5rem -0.35rem;
+    padding: 0 0.15rem;
+    color: var(--rule);
+    font-size: 0.7rem;
+    letter-spacing: -0.15em;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    transition: color 120ms ease;
+  }
+  ul.tasks li:hover .grip { color: var(--muted); }
+  .grip:active { cursor: grabbing; }
+
+  .drag-ghost {
+    opacity: 0.35;
+    background: var(--surface);
+  }
+  .drag-active {
+    background: var(--surface);
+    border-radius: 3px;
+  }
+  body.dragging { cursor: grabbing; }
+  body.dragging .kill,
+  body.dragging select.mover { visibility: hidden; }
 
   .crumb {
     display: flex;
@@ -568,9 +626,14 @@
 
     {% if open_tasks %}
     {% if archive %}<div class="section-label"><span>Reopened &middot; {{ open_tasks|length }}</span></div>{% endif %}
-    <ul class="tasks">
+    <ul class="tasks{{ ' sortable' if active is not none }}"
+        data-project="{{ active or '' }}"
+        data-archived="{{ '1' if archive else '0' }}"
+        data-return="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}"
+        data-action="{{ url_for('reorder_tasks') }}">
       {% for t in open_tasks %}
       <li data-id="{{ t.id }}">
+        {% if active is not none %}<span class="grip" aria-hidden="true">&#8942;&#8942;</span>{% endif %}
         <form method="post" action="{{ url_for('toggle', task_id=t.id) }}">
           <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
           <button class="box" type="submit" aria-label="Complete {{ t.text }}"></button>
@@ -582,17 +645,6 @@
               title="Click to edit">{{ t.text }}</span>
 
         {% if active is none %}<span class="tag">{{ t.project }}</span>{% endif %}
-
-        {% if active is not none %}<span class="ord tord">
-          <form method="post" action="{{ url_for('reorder_task', task_id=t.id, direction='up') }}">
-            <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
-            <button type="submit" aria-label="Move up" {{ 'disabled' if loop.first }}>&uarr;</button>
-          </form>
-          <form method="post" action="{{ url_for('reorder_task', task_id=t.id, direction='down') }}">
-            <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
-            <button type="submit" aria-label="Move down" {{ 'disabled' if loop.last }}>&darr;</button>
-          </form>
-        </span>{% endif %}
 
         <form method="post" action="{{ url_for('move', task_id=t.id) }}">
           <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
@@ -675,6 +727,7 @@
   <button type="button" class="refresh fab" aria-label="Refresh">&#8635;</button>
 </div>
 
+<script src="{{ url_for('static', filename='sortable.min.js') }}"></script>
 <script>
   const root   = document.documentElement;
   const COLORS = { dark: '#171A17', light: '#F0F1EC' };
@@ -720,6 +773,7 @@
         history.replaceState(null, '', res.url);
       }
       paintLabel();
+      mountSortable();
       if (keepScroll) window.scrollTo(0, y);
       fetch('/state', { cache: 'no-store' })
         .then(r => r.json()).then(d => { known = d.mtime; })
@@ -752,6 +806,49 @@
     else if (t.id === 'src-toggle') document.body.classList.toggle('show-source');
     else refresh();
   });
+
+  // --- drag to reorder -------------------------------------------------
+  // Sortable rather than the HTML5 drag API, which doesn't fire on iOS
+  // touch at all. On touch it waits for a short press before taking over,
+  // so a flick still scrolls the page.
+  function mountSortable() {
+    const list = document.querySelector('ul.tasks.sortable');
+    if (!list || typeof Sortable === 'undefined') return;
+
+    Sortable.create(list, {
+      handle: '.grip',
+      animation: 140,
+      ghostClass: 'drag-ghost',
+      chosenClass: 'drag-active',
+      delay: 180,
+      delayOnTouchOnly: true,
+      touchStartThreshold: 4,
+      fallbackOnBody: true,
+
+      onStart() { document.body.classList.add('dragging'); },
+
+      onEnd(evt) {
+        document.body.classList.remove('dragging');
+        if (evt.oldIndex === evt.newIndex) return;
+
+        const ids = Array.from(list.children)
+          .map((li) => li.dataset.id)
+          .filter(Boolean);
+
+        const body = new FormData();
+        body.append('project', list.dataset.project);
+        body.append('archived', list.dataset.archived);
+        body.append('return_to', list.dataset.return);
+        body.append('order', ids.join(','));
+
+        // The DOM already shows the new order, so don't re-render on top of
+        // it -- just persist, and let the next poll reconcile if it failed.
+        fetch(list.dataset.action, { method: 'POST', body })
+          .then((r) => { if (!r.ok) refresh(); })
+          .catch(() => refresh());
+      },
+    });
+  }
 
   // --- inline editing --------------------------------------------------
   // Click a task's text and it becomes an input in place. Enter saves,
@@ -862,6 +959,7 @@
     const box = capture();
     if (box && (box.value.trim() || document.activeElement === box)) return;
     if (document.querySelector('input.relabel')) return;
+    if (document.body.classList.contains('dragging')) return;
 
     try {
       const res = await fetch('/state', { cache: 'no-store' });
@@ -878,6 +976,7 @@
   tick();
 
   paintLabel();
+  mountSortable();
 </script>
 </body>
 </html>
