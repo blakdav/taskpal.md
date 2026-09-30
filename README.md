@@ -31,7 +31,11 @@ Or build on the host instead of pulling:
 | `/all`           | GET      | Every project at once              |
 | `/p/<project>`   | GET      | The list, filtered to one project  |
 | `/project/<name>/<up\|down>` | POST | Reorder a project |
-| `/archive`       | GET      | Completed tasks, with dates        |
+| `/archive`       | GET      | Every project's archive            |
+| `/p/<project>/archive` | GET | One project's archive             |
+| `/rename/<id>`   | POST     | Edit a task's text                 |
+| `/task/<id>/<up\|down>` | POST | Reorder a task in its list     |
+| `/state`         | GET      | File mtime, for change polling     |
 | `/archive-done`  | POST     | Move done tasks to Archive         |
 | `/move/<id>`     | POST     | Move a task to another project     |
 | `/project`       | POST     | Create an empty project            |
@@ -72,19 +76,38 @@ where voice tasks land. Everything else follows file order -- reorder with the
 arrows in the sidebar, or by moving headers around in Obsidian. All and
 Archive sit at the bottom.
 
-## Archive
+## Archives
 
-Completing a task doesn't delete it. The `archive` button moves finished tasks
-into a `## Archive` section stamped with the date:
+Completing a task doesn't delete it. The `archive` button moves finished
+tasks into that project's **own** `### Archive` subsection, stamped with the
+date:
 
-    ## Archive
-    - [x] finished thing ✅ 2026-08-24 <!--id:7cf33e-->
+    ## Groceries
+    - [ ] oat milk <!--id:a1b2c3-->
 
-That's the Obsidian Tasks date format, so the plugin reads it if you use it.
-Archive is hidden from the sidebar until it has something in it, and its tasks
-never show up in All. Archiving is scoped to the view you're in. Voice tasks always go to
-Inbox -- the Action Button has no UI to pick a project with, so triage happens
-afterwards via the arrow control on each row.
+    ### Archive
+    - [x] eggs ✅ 2026-09-28 <!--id:d4e5f6-->
+
+Each project keeps its own history, so ticking through a grocery list weekly
+builds a browsable record of what you've bought without burying everything
+else. Browse one project's history at `/p/<project>/archive`, or all of them
+at `/archive`.
+
+The date format is Obsidian Tasks', so that plugin reads it. Un-completing an
+archived task drops the date and surfaces it under "Reopened" -- it stays in
+the archive until you move it back with the `→` control.
+
+A legacy top-level `## Archive` from an earlier version is folded into the
+Inbox's archive automatically on first page load.
+
+## Editing and ordering
+
+- **Edit** -- click a task's text (or focus it and press Enter). It becomes an
+  input; Enter saves, Escape cancels. The id, state and position survive.
+- **Reorder tasks** -- ↑/↓ on each row, inside a project view. Hidden in All,
+  where the neighbours on screen aren't the neighbours in the file.
+- **Reorder projects** -- ↑/↓ in the sidebar. The whole section moves, archive
+  included. Inbox is pinned to the top.
 
 ## Config
 
@@ -97,7 +120,7 @@ afterwards via the arrow control on each row.
 | `TRANSCRIBE_HINT` | *(empty)* | Comma-separated vocabulary hints |
 | `TASKPAL_TOKEN` | *(unset)* | When set, write routes need a bearer token |
 | `TASKPAL_INBOX` | `Inbox` | Name of the default project |
-| `TASKPAL_ARCHIVE` | `Archive` | Section completed tasks move to |
+| `TASKPAL_ARCHIVE` | `Archive` | Name of each project's archive subsection |
 
 ## Voice
 

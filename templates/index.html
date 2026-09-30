@@ -249,6 +249,49 @@
   select.mover:hover { color: var(--ink); border-color: var(--rule); }
   select.mover option { background: var(--surface); color: var(--ink); }
 
+  /* Task text doubles as an edit affordance -- click it and it becomes an
+     input. No pencil icon cluttering every row. */
+  .label[role="button"] { cursor: text; border-bottom: 1px solid transparent; }
+  .label[role="button"]:hover { border-bottom-color: var(--rule); }
+  .label[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  input.relabel {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 0.95rem;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    padding: 0.1rem 0.35rem;
+    outline: none;
+  }
+
+  /* Per-task reorder, same control as projects but scoped to the row. */
+  .tord { opacity: 0; }
+  ul.tasks li:hover .tord, .tord:focus-within { opacity: 1; }
+  .tord button { width: 1.5rem; height: 0.85rem; font-size: 0.75rem; }
+
+  .crumb {
+    display: flex;
+    align-items: baseline;
+    gap: 0.85rem;
+    margin-bottom: 2rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .crumb a { color: var(--muted); text-decoration: none; }
+  .crumb a:hover { color: var(--ink); }
+
+  .archlink { margin-top: 2rem; font-size: 0.8rem; }
+  .archlink a { color: var(--muted); text-decoration: none; }
+  .archlink a:hover { color: var(--ink); }
+
   .act {
     border: 1px solid var(--rule);
     background: none;
@@ -360,8 +403,53 @@
     .label { font-size: 1rem; }
     .kill { padding: 0 0.5rem; font-size: 1.15rem; }
     select.mover { font-size: 0.85rem; padding: 0.25rem; }
+    .tord { opacity: 1; }
+    .tord button { width: 1.9rem; height: 1.2rem; font-size: 0.95rem; }
     .capture input { padding: 1rem 1rem 1rem 2.1rem; font-size: 1.05rem; }
-    .act { padding: 0.4rem 0.9rem; font-size: 0.8rem; }
+    /* Task text doubles as an edit affordance -- click it and it becomes an
+     input. No pencil icon cluttering every row. */
+  .label[role="button"] { cursor: text; border-bottom: 1px solid transparent; }
+  .label[role="button"]:hover { border-bottom-color: var(--rule); }
+  .label[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  input.relabel {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 0.95rem;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    padding: 0.1rem 0.35rem;
+    outline: none;
+  }
+
+  /* Per-task reorder, same control as projects but scoped to the row. */
+  .tord { opacity: 0; }
+  ul.tasks li:hover .tord, .tord:focus-within { opacity: 1; }
+  .tord button { width: 1.5rem; height: 0.85rem; font-size: 0.75rem; }
+
+  .crumb {
+    display: flex;
+    align-items: baseline;
+    gap: 0.85rem;
+    margin-bottom: 2rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .crumb a { color: var(--muted); text-decoration: none; }
+  .crumb a:hover { color: var(--ink); }
+
+  .archlink { margin-top: 2rem; font-size: 0.8rem; }
+  .archlink a { color: var(--muted); text-decoration: none; }
+  .archlink a:hover { color: var(--ink); }
+
+  .act { padding: 0.4rem 0.9rem; font-size: 0.8rem; }
     nav a { padding: 0.5rem 0.7rem; }
     main { padding-bottom: 4rem; }
     nav a {
@@ -419,9 +507,9 @@
     <div class="rail">
       {% for p in projects %}
       <div class="row">
-        <a href="{{ url_for('project_view', project=p.name) }}"
+        <a href="{{ url_for('project_archive', project=p.name) if archive else url_for('project_view', project=p.name) }}"
            class="{{ 'on' if active == p.name }}">
-          <span>{{ p.name }}</span><span class="n">{{ p.open or '' }}</span>
+          <span>{{ p.name }}</span><span class="n">{{ (p.archived if archive else p.open) or '' }}</span>
         </a>
         {% if p.name == inbox %}<span class="ord-gap"></span>{% else %}
         <span class="ord">
@@ -444,9 +532,9 @@
         </a>
         <span class="ord-gap"></span>
       </div>
-      {% if archived_count %}
+      {% if total_archived %}
       <div class="row">
-        <a href="{{ url_for('archive_view') }}" class="{{ 'on' if archive }}">
+        <a href="{{ url_for('archive_view') }}" class="{{ 'on' if archive and not active }}">
           <span>Archive</span>
         </a>
         <span class="ord-gap"></span>
@@ -465,27 +553,49 @@
       <input id="add" name="text" autocomplete="off"
              placeholder="add to {{ active or inbox }}, press enter">
       <input type="hidden" name="project" value="{{ active or inbox }}">
-      <input type="hidden" name="return_to" value="{{ '@' if archive else (active or '*') }}">
+      <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
     </form>
+    {% else %}
+    <div class="crumb">
+      <a href="{{ url_for('project_view', project=active) if active else url_for('all_view') }}">&larr; back</a>
+      <span>{{ (active ~ ' archive') if active else 'All archives' }}</span>
+    </div>
     {% endif %}
 
     {% if not open_tasks and not done_tasks %}
-    <p class="empty">{% if archive %}Nothing archived yet.{% else %}Nothing open{{ ' in ' ~ active if active }}. Type above to add.{% endif %}</p>
+    <p class="empty">{% if archive %}Nothing archived {{ 'in ' ~ active if active }} yet.{% else %}Nothing open{{ ' in ' ~ active if active }}. Type above to add.{% endif %}</p>
     {% endif %}
 
     {% if open_tasks %}
     {% if archive %}<div class="section-label"><span>Reopened &middot; {{ open_tasks|length }}</span></div>{% endif %}
     <ul class="tasks">
       {% for t in open_tasks %}
-      <li>
+      <li data-id="{{ t.id }}">
         <form method="post" action="{{ url_for('toggle', task_id=t.id) }}">
-          <input type="hidden" name="return_to" value="{{ '@' if archive else (active or '*') }}">
+          <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
           <button class="box" type="submit" aria-label="Complete {{ t.text }}"></button>
         </form>
-        <span class="label">{{ t.text }}</span>
+
+        <span class="label" tabindex="0" role="button"
+              data-action="{{ url_for('rename', task_id=t.id) }}"
+              data-return="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}"
+              title="Click to edit">{{ t.text }}</span>
+
         {% if active is none %}<span class="tag">{{ t.project }}</span>{% endif %}
+
+        {% if active is not none %}<span class="ord tord">
+          <form method="post" action="{{ url_for('reorder_task', task_id=t.id, direction='up') }}">
+            <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
+            <button type="submit" aria-label="Move up" {{ 'disabled' if loop.first }}>&uarr;</button>
+          </form>
+          <form method="post" action="{{ url_for('reorder_task', task_id=t.id, direction='down') }}">
+            <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
+            <button type="submit" aria-label="Move down" {{ 'disabled' if loop.last }}>&darr;</button>
+          </form>
+        </span>{% endif %}
+
         <form method="post" action="{{ url_for('move', task_id=t.id) }}">
-          <input type="hidden" name="return_to" value="{{ '@' if archive else (active or '*') }}">
+          <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
           <select class="mover" name="project" aria-label="Move {{ t.text }}"
                   onchange="this.form.requestSubmit()">
             <option value="" selected>&rarr;</option>
@@ -494,8 +604,9 @@
             {% endfor %}
           </select>
         </form>
+
         <form method="post" action="{{ url_for('delete', task_id=t.id) }}">
-          <input type="hidden" name="return_to" value="{{ '@' if archive else (active or '*') }}">
+          <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
           <button class="kill" type="submit" aria-label="Delete {{ t.text }}">&times;</button>
         </form>
       </li>
@@ -508,28 +619,42 @@
       <span>{{ 'Archived' if archive else 'Done' }} &middot; {{ done_tasks|length }}</span>
       {% if not archive %}
       <form method="post" action="{{ url_for('archive_done') }}">
-        <input type="hidden" name="return_to" value="{{ '@' if archive else (active or '*') }}">
+        <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
         <button class="act" type="submit">archive</button>
       </form>
       {% endif %}
     </div>
     <ul class="tasks">
       {% for t in done_tasks %}
-      <li class="done">
+      <li class="done" data-id="{{ t.id }}">
         <form method="post" action="{{ url_for('toggle', task_id=t.id) }}">
-          <input type="hidden" name="return_to" value="{{ '@' if archive else (active or '*') }}">
+          <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
           <button class="box checked" type="submit" aria-label="Reopen {{ t.text }}">&check;</button>
         </form>
-        <span class="label">{{ t.text }}</span>
+
+        <span class="label" tabindex="0" role="button"
+              data-action="{{ url_for('rename', task_id=t.id) }}"
+              data-return="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}"
+              title="Click to edit">{{ t.text }}</span>
+
         {% if t.done_on %}<span class="when">{{ t.done_on }}</span>{% endif %}
-        {% if active is none and not archive %}<span class="tag">{{ t.project }}</span>{% endif %}
+        {% if active is none %}<span class="tag">{{ t.project }}</span>{% endif %}
+
         <form method="post" action="{{ url_for('delete', task_id=t.id) }}">
-          <input type="hidden" name="return_to" value="{{ '@' if archive else (active or '*') }}">
+          <input type="hidden" name="return_to" value="{{ (active ~ '@') if (archive and active) else ('@' if archive else (active or '*')) }}">
           <button class="kill" type="submit" aria-label="Delete {{ t.text }}">&times;</button>
         </form>
       </li>
       {% endfor %}
     </ul>
+    {% endif %}
+
+    {% if not archive and active and here_archived %}
+    <p class="archlink">
+      <a href="{{ url_for('project_archive', project=active) }}">
+        {{ here_archived }} archived in {{ active }} &rarr;
+      </a>
+    </p>
     {% endif %}
 
     <pre id="source">{% for t in open_tasks %}{{ t.raw }}
@@ -628,6 +753,60 @@
     else refresh();
   });
 
+  // --- inline editing --------------------------------------------------
+  // Click a task's text and it becomes an input in place. Enter saves,
+  // Escape backs out. Nothing is posted unless the text actually changed.
+  function startEdit(label) {
+    if (label.dataset.editing) return;
+    label.dataset.editing = '1';
+
+    const original = label.textContent.trim();
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'relabel';
+    input.value = original;
+    label.replaceWith(input);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+
+    let settled = false;
+
+    function cancel() {
+      if (settled) return;
+      settled = true;
+      delete label.dataset.editing;
+      input.replaceWith(label);
+    }
+
+    function commit() {
+      if (settled) return;
+      const next = input.value.trim();
+      if (!next || next === original) { cancel(); return; }
+      settled = true;
+      const body = new FormData();
+      body.append('text', next);
+      body.append('return_to', label.dataset.return || '*');
+      swap(label.dataset.action, { method: 'POST', body });
+    }
+
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', commit);
+  }
+
+  document.addEventListener('click', (e) => {
+    const label = e.target.closest('.label[role="button"]');
+    if (label) startEdit(label);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const label = e.target.closest('.label[role="button"]');
+    if (label) { e.preventDefault(); startEdit(label); }
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.target.matches('input, textarea, select')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -682,6 +861,7 @@
     // Never yank the page out from under a half-typed task.
     const box = capture();
     if (box && (box.value.trim() || document.activeElement === box)) return;
+    if (document.querySelector('input.relabel')) return;
 
     try {
       const res = await fetch('/state', { cache: 'no-store' });

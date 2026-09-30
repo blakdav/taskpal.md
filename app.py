@@ -1,9 +1,17 @@
 """
-Markdown-backed to-do list with projects.
+Markdown-backed to-do list with projects and per-project archives.
 
-The file on disk is the source of truth. `##` headers are projects; tasks
-belong to whichever header precedes them. Anything before the first header
-lands in Inbox. Every request does a read-modify-write, so Obsidian / vim /
+The file on disk is the source of truth.
+
+    ## Groceries            <- a project
+    - [ ] oat milk <!--id:a1b2c3-->
+
+    ### Archive             <- that project's own history
+    - [x] eggs ✅ 2026-09-28 <!--id:d4e5f6-->
+
+Every project keeps its own archive, so a grocery list you tick through
+weekly builds a browsable record of what you've bought without burying
+everything else. Each request does a read-modify-write, so Obsidian / vim /
 Syncthing can touch the same file without this app losing their changes.
 """
 
@@ -26,8 +34,7 @@ TASKPAL_PATH = Path(os.environ.get("TASKPAL_PATH", "data/taskpal.md"))
 # first `##` header.
 INBOX = os.environ.get("TASKPAL_INBOX", "Inbox")
 
-# Completed tasks get moved here rather than deleted. It's a real `##` section
-# in the file, just kept out of the sidebar.
+# The `###` subsection name, used inside every project.
 ARCHIVE = os.environ.get("TASKPAL_ARCHIVE", "Archive")
 
 # --- transcription -----------------------------------------------------
@@ -55,15 +62,20 @@ TASK_RE = re.compile(
     r"(?:\s*<!--id:(?P<id>[0-9a-f]{6})-->)?\s*$"
 )
 
-# ## Project name
-HEADER_RE = re.compile(r"^##\s+(?P<name>.+?)\s*$")
+HEADER_RE = re.compile(r"^##\s+(?P<name>.+?)\s*$")       # project
+SUB_RE = re.compile(r"^###\s+(?P<name>.+?)\s*$")         # subsection
 
-# Completion date, Obsidian Tasks style: ✅ 2026-08-24
-DONE_RE = re.compile(r"\s*\u2705\s*(?P<date>\d{4}-\d{2}-\d{2})")
+# Completion date, Obsidian Tasks style: ✅ 2026-09-28
+DONE_RE = re.compile(r"\s*✅\s*(?P<date>\d{4}-\d{2}-\d{2})")
 
 
 def new_id() -> str:
     return secrets.token_hex(3)
+
+
+def is_archive_head(line: str) -> bool:
+    m = SUB_RE.match(line)
+    return bool(m) and m.group("name").strip().lower() == ARCHIVE.lower()
 
 
 # --- file io -----------------------------------------------------------
@@ -93,16 +105,20 @@ def write_file(content: str) -> None:
 def parse(content: str):
     """Return (tasks, healed_content).
 
-    Each task carries the project it sits under. Tasks missing an id get one
-    assigned, so items added by hand in Obsidian become clickable here.
+    Each task carries its project and whether it sits in that project's
+    archive. Tasks missing an id get one assigned, so items added by hand in
+    Obsidian become clickable here.
     """
     tasks, lines, changed = [], content.splitlines(), False
-    current = INBOX
+    current, archived = INBOX, False
 
     for i, line in enumerate(lines):
-        h = HEADER_RE.match(line)
-        if h:
-            current = h.group("name")
+        if HEADER_RE.match(line):
+            current = HEADER_RE.match(line).group("name")
+            archived = False
+            continue
+        if SUB_RE.match(line):
+            archived = is_archive_head(line)
             continue
 
         m = TASK_RE.match(line)
@@ -127,6 +143,7 @@ def parse(content: str):
             "done": m.group("mark").lower() == "x",
             "done_on": d.group("date") if d else None,
             "project": current,
+            "archived": archived,
             "raw": lines[i],
         })
 
@@ -147,63 +164,33 @@ def project_list(content: str, tasks):
         if h and h.group("name") not in names:
             names.append(h.group("name"))
 
-    # Tasks sitting above the first header, or under a header that has since
-    # been deleted.
     for t in tasks:
         if t["project"] not in names:
             names.append(t["project"])
 
-    names = [n for n in names if n != ARCHIVE]
-
-    # Inbox is where voice tasks land, so it stays pinned to the top no
-    # matter where its header sits in the file.
+    # Inbox is where voice tasks land, so it stays pinned to the top.
     if INBOX in names:
         names.remove(INBOX)
     names.insert(0, INBOX)
 
-    counts = {n: 0 for n in names}
+    open_n, arch_n = {n: 0 for n in names}, {n: 0 for n in names}
     for t in tasks:
-        if not t["done"]:
-            counts[t["project"]] = counts.get(t["project"], 0) + 1
+        if t["archived"]:
+            arch_n[t["project"]] = arch_n.get(t["project"], 0) + 1
+        elif not t["done"]:
+            open_n[t["project"]] = open_n.get(t["project"], 0) + 1
 
-    return [{"name": n, "open": counts.get(n, 0)} for n in names]
+    return [{"name": n, "open": open_n.get(n, 0), "archived": arch_n.get(n, 0)}
+            for n in names]
 
 
-# --- mutation ----------------------------------------------------------
-
-def section_bounds(lines, project: str):
-    """(start, end) line indices for a project's body, or None.
-
-    `start` is the line after the header; `end` is one past the last line
-    that belongs to the section.
-    """
-    start = None
-    for i, line in enumerate(lines):
-        h = HEADER_RE.match(line)
-        if h and h.group("name") == project:
-            start = i + 1
-            break
-    if start is None:
-        return None
-
-    end = len(lines)
-    for j in range(start, len(lines)):
-        if HEADER_RE.match(lines[j]):
-            end = j
-            break
-
-    # Don't count trailing blank lines as part of the section.
-    while end > start and not lines[end - 1].strip():
-        end -= 1
-
-    return start, end
-
+# --- section geometry --------------------------------------------------
 
 def split_sections(lines):
-    """(preamble, [(name, body_lines), ...]).
+    """(preamble, [(name, body_lines), ...]) split on `##` only.
 
-    Preamble is everything above the first `##` -- the H1, notes, whatever
-    you keep at the top of the file. Reordering must never disturb it.
+    A project's `### Archive` stays inside its body, so moving a project
+    carries its history with it.
     """
     preamble, sections = [], []
     for line in lines:
@@ -235,56 +222,100 @@ def join_sections(preamble, sections):
     return "\n".join(out) + "\n"
 
 
-def insert_line(lines, project: str, line: str):
-    """Put `line` at the end of a project's section, creating it if needed."""
-    bounds = section_bounds(lines, project)
-    if bounds is None:
+def section_bounds(lines, project: str, archived: bool = False):
+    """(start, end) for where tasks live in a project.
+
+    With archived=False this is the live area, which stops at the project's
+    `### Archive` header -- so a new task never lands in the history. With
+    archived=True it's the archive subsection's body, or None if absent.
+    """
+    start = None
+    for i, line in enumerate(lines):
+        h = HEADER_RE.match(line)
+        if h and h.group("name") == project:
+            start = i + 1
+            break
+    if start is None:
+        return None
+
+    end = len(lines)
+    arch_at = None
+    for j in range(start, len(lines)):
+        if HEADER_RE.match(lines[j]):
+            end = j
+            break
+        if arch_at is None and is_archive_head(lines[j]):
+            arch_at = j
+
+    if archived:
+        if arch_at is None:
+            return None
+        a_start, a_end = arch_at + 1, end
+        while a_end > a_start and not lines[a_end - 1].strip():
+            a_end -= 1
+        return a_start, a_end
+
+    live_end = arch_at if arch_at is not None else end
+    while live_end > start and not lines[live_end - 1].strip():
+        live_end -= 1
+    return start, live_end
+
+
+def insert_line(lines, project: str, line: str, archived: bool = False):
+    """Put `line` at the end of a project's live or archive area, creating
+    whatever's missing."""
+    live = section_bounds(lines, project, archived=False)
+
+    if live is None:                                  # project doesn't exist
         if lines and lines[-1].strip():
             lines.append("")
         lines.append(f"## {project}")
+        if archived:
+            lines.append("")
+            lines.append(f"### {ARCHIVE}")
         lines.append(line)
         return lines
 
-    _, end = bounds
-    lines.insert(end, line)
+    if not archived:
+        lines.insert(live[1], line)
+        return lines
+
+    arch = section_bounds(lines, project, archived=True)
+    if arch is None:                                  # no archive yet
+        at = live[1]
+        lines.insert(at, "")
+        lines.insert(at + 1, f"### {ARCHIVE}")
+        lines.insert(at + 2, line)
+    else:
+        lines.insert(arch[1], line)
     return lines
 
 
-def append_task(text: str, project: str = None) -> str:
-    """Append one task. The single write path -- typed and voice both land
-    here."""
-    project = project or INBOX
-    tid = new_id()
-    entry = f"- [ ] {text} <!--id:{tid}-->"
+# --- healing -----------------------------------------------------------
 
-    with _lock:
-        lines = read_file().splitlines()
-        insert_line(lines, project, entry)
-        write_file("\n".join(lines) + "\n")
-    return tid
+def migrate_global_archive(content: str) -> str:
+    """One-time: fold a legacy top-level `## Archive` into the Inbox's own
+    archive, then drop the section. Earlier versions kept one global
+    graveyard; those entries have no project of their own, so Inbox is where
+    they land."""
+    preamble, sections = split_sections(content.splitlines())
+    idx = next((i for i, (n, _) in enumerate(sections)
+                if n.strip().lower() == ARCHIVE.lower()), None)
+    if idx is None:
+        return content
 
+    _, body = sections.pop(idx)
+    entries = [ln for ln in body if TASK_RE.match(ln) and
+               TASK_RE.match(ln).group("text").strip()]
 
-def authorised() -> bool:
-    if not TASKPAL_TOKEN:
-        return True
-    header = request.headers.get("Authorization", "")
-    supplied = header[7:] if header.startswith("Bearer ") else ""
-    return secrets.compare_digest(supplied, TASKPAL_TOKEN)
+    lines = join_sections(preamble, sections).splitlines()
+    for entry in entries:
+        insert_line(lines, INBOX, entry.strip(), archived=True)
+    return "\n".join(lines) + "\n"
 
-
-def deny():
-    return jsonify(error="unauthorised"), 401
-
-
-# --- views -------------------------------------------------------------
 
 def hoist_inbox(content: str) -> str:
-    """Move the Inbox section to the top of the file.
-
-    The sidebar pins Inbox first; reordering swaps sections in file order. If
-    the two disagreed, the arrows would move projects past a neighbour that
-    isn't on screen.
-    """
+    """Move the Inbox section to the top of the file, matching the sidebar."""
     preamble, sections = split_sections(content.splitlines())
     idx = next((i for i, (n, _) in enumerate(sections) if n == INBOX), None)
     if idx in (None, 0):
@@ -293,20 +324,11 @@ def hoist_inbox(content: str) -> str:
     return join_sections(preamble, sections)
 
 
-def sink_archive(content: str) -> str:
-    """Move the Archive section to the end of the file.
+def heal(content: str) -> str:
+    return hoist_inbox(migrate_global_archive(content))
 
-    Archive is a graveyard, not a project -- it belongs below everything you
-    might actually work on. New projects get appended at the end, and
-    reordering shuffles sections, so without this it drifts upwards.
-    """
-    preamble, sections = split_sections(content.splitlines())
-    idx = next((i for i, (n, _) in enumerate(sections) if n == ARCHIVE), None)
-    if idx is None or idx == len(sections) - 1:
-        return content
-    sections.append(sections.pop(idx))
-    return join_sections(preamble, sections)
 
+# --- views -------------------------------------------------------------
 
 def render(active: str = None, archive: bool = False):
     with _lock:
@@ -314,7 +336,9 @@ def render(active: str = None, archive: bool = False):
         tasks, healed = parse(content)
         if healed != content:
             content = healed
-        content = sink_archive(hoist_inbox(content))
+        fixed = heal(content)
+        if fixed != content:
+            content = fixed
         if content != read_file():
             write_file(content)
             tasks, _ = parse(content)
@@ -322,14 +346,18 @@ def render(active: str = None, archive: bool = False):
     projects = project_list(content, tasks)
     known = {p["name"] for p in projects}
     if active is not None and active not in known:
-        active = None  # unknown project -> show everything
+        active = None
 
     if archive:
-        shown = [t for t in tasks if t["project"] == ARCHIVE]
+        shown = [t for t in tasks
+                 if t["archived"] and (active is None or t["project"] == active)]
     elif active is None:
-        shown = [t for t in tasks if t["project"] != ARCHIVE]
+        shown = [t for t in tasks if not t["archived"]]
     else:
-        shown = [t for t in tasks if t["project"] == active]
+        shown = [t for t in tasks
+                 if t["project"] == active and not t["archived"]]
+
+    here = next((p for p in projects if p["name"] == active), None)
 
     return render_template(
         "index.html",
@@ -337,10 +365,11 @@ def render(active: str = None, archive: bool = False):
         done_tasks=[t for t in shown if t["done"]],
         projects=projects,
         active=active,
-        total_open=sum(p["open"] for p in projects),
-        inbox=INBOX,
         archive=archive,
-        archived_count=sum(1 for t in tasks if t["project"] == ARCHIVE),
+        total_open=sum(p["open"] for p in projects),
+        here_archived=here["archived"] if here else 0,
+        total_archived=sum(p["archived"] for p in projects),
+        inbox=INBOX,
         path=TASKPAL_PATH.name,
     )
 
@@ -351,8 +380,7 @@ ARCHIVED = "@"   # ... and "the archive view"
 
 @app.route("/")
 def index():
-    """Opens on whichever project sits at the top of the file. Reorder the
-    sidebar and you've changed what greets you."""
+    """Opens on whichever project sits at the top of the file."""
     with _lock:
         content = read_file()
     tasks, _ = parse(content)
@@ -370,14 +398,70 @@ def project_view(project):
     return render(unquote(project))
 
 
-def back_to(project: str = None):
-    if project == ARCHIVED:
+@app.route("/archive")
+def archive_view():
+    return render(None, archive=True)
+
+
+@app.route("/p/<path:project>/archive")
+def project_archive(project):
+    return render(unquote(project), archive=True)
+
+
+@app.route("/state")
+def state():
+    """Cheap change check: the file's mtime. The page polls this and only
+    pulls new markup when the number moves."""
+    ensure_file()
+    return jsonify(mtime=TASKPAL_PATH.stat().st_mtime)
+
+
+def back_to(target: str = None):
+    """`target` is a project name, or a sentinel. A project name may carry an
+    `@` suffix meaning that project's archive."""
+    if target == ARCHIVED:
         return redirect(url_for("archive_view"))
-    if project == ALL:
+    if target == ALL:
         return redirect(url_for("all_view"))
-    if project:
-        return redirect(url_for("project_view", project=quote(project)))
+    if target and target.endswith(ARCHIVED):
+        name = target[:-1]
+        return redirect(url_for("project_archive", project=quote(name)))
+    if target:
+        return redirect(url_for("project_view", project=quote(target)))
     return redirect(url_for("index"))
+
+
+# --- write helpers -----------------------------------------------------
+
+def append_task(text: str, project: str = None) -> str:
+    project = project or INBOX
+    tid = new_id()
+    entry = f"- [ ] {text} <!--id:{tid}-->"
+    with _lock:
+        lines = read_file().splitlines()
+        insert_line(lines, project, entry)
+        write_file("\n".join(lines) + "\n")
+    return tid
+
+
+def find_task(lines, task_id):
+    for i, line in enumerate(lines):
+        m = TASK_RE.match(line)
+        if m and m.group("id") == task_id:
+            return i, m
+    return None, None
+
+
+def authorised() -> bool:
+    if not TASKPAL_TOKEN:
+        return True
+    header = request.headers.get("Authorization", "")
+    supplied = header[7:] if header.startswith("Bearer ") else ""
+    return secrets.compare_digest(supplied, TASKPAL_TOKEN)
+
+
+def deny():
+    return jsonify(error="unauthorised"), 401
 
 
 # --- write routes ------------------------------------------------------
@@ -394,7 +478,7 @@ def add_task():
                or payload.get("project") or INBOX).strip()
 
     if not text:
-        return back_to(request.form.get("project"))
+        return back_to(request.form.get("return_to"))
 
     append_task(text, project)
 
@@ -460,6 +544,67 @@ def add_task_voice():
     return jsonify(ok=True, text=text, project=INBOX)
 
 
+@app.route("/rename/<task_id>", methods=["POST"])
+def rename(task_id):
+    """Edit a task's text in place, keeping its id, state and position."""
+    if not authorised():
+        return deny()
+
+    text = (request.form.get("text") or "").strip()
+    if not text:
+        return back_to(request.form.get("return_to"))
+
+    with _lock:
+        lines = read_file().splitlines()
+        i, m = find_task(lines, task_id)
+        if i is not None:
+            # Preserve a completion stamp the user didn't type.
+            old = m.group("text").strip()
+            d = DONE_RE.search(old)
+            stamp = f" ✅ {d.group('date')}" if d else ""
+            lines[i] = f"{m.group('indent')}- [{m.group('mark')}] " \
+                       f"{text}{stamp} <!--id:{task_id}-->"
+            write_file("\n".join(lines) + "\n")
+
+    return back_to(request.form.get("return_to"))
+
+
+@app.route("/task/<task_id>/<direction>", methods=["POST"])
+def reorder_task(task_id, direction):
+    """Swap a task with its neighbour inside the same list."""
+    if not authorised():
+        return deny()
+
+    step = -1 if direction == "up" else 1 if direction == "down" else 0
+    if not step:
+        return back_to(request.form.get("return_to"))
+
+    with _lock:
+        lines = read_file().splitlines()
+        i, _ = find_task(lines, task_id)
+        if i is None:
+            return back_to(request.form.get("return_to"))
+
+        # Only swap within the same contiguous run of tasks, so a task can't
+        # jump a heading into another project.
+        j = i + step
+        while 0 <= j < len(lines):
+            if HEADER_RE.match(lines[j]) or SUB_RE.match(lines[j]):
+                j = None
+                break
+            if TASK_RE.match(lines[j]) and TASK_RE.match(lines[j]).group("text").strip():
+                break
+            j += step
+        else:
+            j = None
+
+        if j is not None and 0 <= j < len(lines):
+            lines[i], lines[j] = lines[j], lines[i]
+            write_file("\n".join(lines) + "\n")
+
+    return back_to(request.form.get("return_to"))
+
+
 @app.route("/move/<task_id>", methods=["POST"])
 def move(task_id):
     """Pull a task out of its section and drop it at the end of another."""
@@ -472,13 +617,9 @@ def move(task_id):
 
     with _lock:
         lines = read_file().splitlines()
-        entry = None
-        for i, line in enumerate(lines):
-            m = TASK_RE.match(line)
-            if m and m.group("id") == task_id:
-                entry = lines.pop(i)
-                break
-        if entry is not None:
+        i, _ = find_task(lines, task_id)
+        if i is not None:
+            entry = lines.pop(i)
             insert_line(lines, target, entry.strip())
             write_file("\n".join(lines) + "\n")
 
@@ -497,9 +638,7 @@ def add_project():
     with _lock:
         preamble, sections = split_sections(read_file().splitlines())
         if not any(n == name for n, _ in sections):
-            at = next((i for i, (n, _) in enumerate(sections) if n == ARCHIVE),
-                      len(sections))
-            sections.insert(at, [name, []])
+            sections.append([name, []])
             write_file(join_sections(preamble, sections))
 
     return back_to(name)
@@ -507,26 +646,21 @@ def add_project():
 
 @app.route("/project/<path:project>/<direction>", methods=["POST"])
 def reorder_project(project, direction):
-    """Swap a whole `## section` with its neighbour -- header, tasks, and any
-    notes underneath move together."""
+    """Swap a whole `## section` with its neighbour -- header, tasks, and the
+    project's archive all move together."""
     if not authorised():
         return deny()
 
     project = unquote(project)
     step = -1 if direction == "up" else 1 if direction == "down" else 0
-    if not step:
-        return back_to(project)
-
-    if project in (INBOX, ARCHIVE):
+    if not step or project == INBOX:
         return back_to(project)
 
     with _lock:
         preamble, sections = split_sections(read_file().splitlines())
 
-        # Inbox is pinned at the top and Archive at the bottom, so neither is
-        # a valid neighbour to swap with.
-        movable = [i for i, (n, _) in enumerate(sections)
-                   if n not in (INBOX, ARCHIVE)]
+        # Inbox is pinned at the top, so it's never a valid swap partner.
+        movable = [i for i, (n, _) in enumerate(sections) if n != INBOX]
         pos = next((k for k, i in enumerate(movable)
                     if sections[i][0] == project), None)
 
@@ -545,14 +679,18 @@ def toggle(task_id):
 
     with _lock:
         lines = read_file().splitlines()
-        for i, line in enumerate(lines):
-            m = TASK_RE.match(line)
-            if m and m.group("id") == task_id:
-                mark = " " if m.group("mark").lower() == "x" else "x"
-                lines[i] = f"{m.group('indent')}- [{mark}] " \
-                           f"{m.group('text').strip()} <!--id:{task_id}-->"
-                break
-        write_file("\n".join(lines) + "\n")
+        i, m = find_task(lines, task_id)
+        if i is not None:
+            done = m.group("mark").lower() == "x"
+            mark = " " if done else "x"
+            text = m.group("text").strip()
+            # Un-completing something drops its completion date, which is no
+            # longer true. Re-completing it gets a fresh one on next archive.
+            if done:
+                text = DONE_RE.sub("", text).strip()
+            lines[i] = f"{m.group('indent')}- [{mark}] " \
+                       f"{text} <!--id:{task_id}-->"
+            write_file("\n".join(lines) + "\n")
 
     return back_to(request.form.get("return_to"))
 
@@ -573,12 +711,12 @@ def delete(task_id):
 
 @app.route("/archive-done", methods=["POST"])
 def archive_done():
-    """Move completed tasks into the Archive section, stamped with today's
-    date. Scoped to the current view, so archiving Work leaves finished items
-    under Home alone.
+    """Move completed tasks into their OWN project's archive, stamped with
+    today's date. Scoped to the current view.
 
-    Nothing is deleted -- the point is that a completed task is a record, and
-    the file is where records belong.
+    Nothing is deleted -- a finished task is a record, and keeping each
+    project's record separate means ticking through a grocery list doesn't
+    bury the history of everything else.
     """
     if not authorised():
         return deny()
@@ -586,17 +724,22 @@ def archive_done():
     scope = (request.form.get("return_to") or "").strip()
     if scope in (ALL, ARCHIVED):
         scope = ""
+    scope = scope.rstrip(ARCHIVED)
 
     stamp = date.today().isoformat()
 
     with _lock:
         lines = read_file().splitlines()
-        kept, moved, current = [], [], INBOX
+        kept, moved, current, in_arch = [], [], INBOX, False
 
         for line in lines:
-            h = HEADER_RE.match(line)
-            if h:
-                current = h.group("name")
+            if HEADER_RE.match(line):
+                current = HEADER_RE.match(line).group("name")
+                in_arch = False
+                kept.append(line)
+                continue
+            if SUB_RE.match(line):
+                in_arch = is_archive_head(line)
                 kept.append(line)
                 continue
 
@@ -604,38 +747,23 @@ def archive_done():
             done = m and m.group("mark").lower() == "x"
             in_scope = (not scope) or current == scope
 
-            if done and in_scope and current != ARCHIVE:
+            if done and in_scope and not in_arch:
                 text = m.group("text").strip()
-                # Don't double-stamp something archived by hand already.
                 if not DONE_RE.search(text):
-                    text = f"{text} \u2705 {stamp}"
+                    text = f"{text} ✅ {stamp}"
                 tid = m.group("id") or new_id()
-                moved.append(f"- [x] {text} <!--id:{tid}-->")
+                moved.append((current, f"- [x] {text} <!--id:{tid}-->"))
                 continue
 
             kept.append(line)
 
-        for entry in moved:
-            insert_line(kept, ARCHIVE, entry)
+        for project, entry in moved:
+            insert_line(kept, project, entry, archived=True)
 
         if moved:
             write_file("\n".join(kept) + "\n")
 
     return back_to(request.form.get("return_to"))
-
-
-@app.route("/state")
-def state():
-    """Cheap change check: the file's mtime. The page polls this and only
-    pulls new markup when the number moves, so a list sitting open all day
-    costs a few dozen bytes a minute."""
-    ensure_file()
-    return jsonify(mtime=TASKPAL_PATH.stat().st_mtime)
-
-
-@app.route("/archive")
-def archive_view():
-    return render(None, archive=True)
 
 
 @app.route("/edit", methods=["GET", "POST"])
